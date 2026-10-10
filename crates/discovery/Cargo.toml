@@ -1,0 +1,13 @@
+[package]
+name = "aether-discovery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Device discovery (mDNS) and pairing"
+
+[dependencies]
+aether-common = { path = "../common" }
+tracing = { workspace = true }
+thiserror = { workspace = true }

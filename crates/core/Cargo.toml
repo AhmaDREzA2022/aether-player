@@ -1,0 +1,15 @@
+[package]
+name = "aether-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Core logic: queue, playlist, player API, library management"
+
+[dependencies]
+aether-common = { path = "../common" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }

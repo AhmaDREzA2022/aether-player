@@ -1,0 +1,49 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tauri
+src-tauri/target/
+
+# Android
+*.apk
+*.aab
+*.dex
+*.class
+bin/
+gen/
+out/
+.gradle/
+local.properties
+*.iml
+.externalNativeBuild/
+.cxx/
+
+# Logs & temp
+*.log
+*.tmp
+*.temp
+
+# Environment
+.env
+.env.local
+
+# Coverage / profiling
+*.profraw
+*.profdata
+coverage/
+
+# Docs build
+/docs/book/

@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/audio",
+    "crates/metadata",
+    "crates/sync",
+    "crates/discovery",
+    "crates/common",
+    "protocol",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+authors = ["AhmaDREzA2022"]
+repository = "https://github.com/AhmaDREzA2022/aether-player"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
