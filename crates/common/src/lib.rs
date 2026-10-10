@@ -4,6 +4,7 @@
 
 // Placeholder – real implementation comes in later commits.
 mod error;
+pub mod mock;
 mod player;
 mod track;
 
