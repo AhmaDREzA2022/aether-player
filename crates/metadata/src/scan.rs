@@ -36,7 +36,14 @@ pub fn read_track(path: &Path) -> Result<Track, PlayerError> {
         .unwrap_or_else(|| "Unknown album".to_string());
     let track_no = tag.and_then(|t| t.track());
 
-    Ok(Track { path: path.to_path_buf(), title, artist, album, duration, track_no })
+    Ok(Track {
+        path: path.to_path_buf(),
+        title,
+        artist,
+        album,
+        duration,
+        track_no,
+    })
 }
 
 /// Recursively scan a folder. Hidden files/folders and unsupported
@@ -60,7 +67,6 @@ pub fn scan_folder(root: &Path) -> Vec<Track> {
 
     tracks.sort_by(|a, b| a.path.cmp(&b.path));
     tracks
-
 }
 
 fn is_hidden(entry: &DirEntry) -> bool {
@@ -85,9 +91,9 @@ fn file_stem(path: &Path) -> String {
 mod tests {
     use crate::scan;
 
-use super::*;
-    use std::{fs, vec};
+    use super::*;
     use std::path::Path;
+    use std::{fs, vec};
 
     /// Writes a valid wav file for silence so tests need no commited audio.
     fn write_silent_wav(path: &Path, seconds: u32) {
@@ -141,7 +147,6 @@ use super::*;
         assert_eq!(track.duration.as_secs(), 1);
     }
 
-
     #[test]
     fn corrupt_files_are_skipped_not_fatal() {
         let dir = tempfile::tempdir().unwrap();
@@ -152,8 +157,6 @@ use super::*;
         assert_eq!(tracks.len(), 1);
         assert_eq!(tracks[0].title, "good");
     }
-
-
 
     #[test]
     fn reading_a_missing_returns_not_found() {

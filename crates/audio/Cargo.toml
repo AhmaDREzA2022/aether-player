@@ -8,6 +8,10 @@ repository.workspace = true
 description = "Audio playback backends"
 
 [dependencies]
-aether-common = { path = "../common" }
-tracing = { workspace = true }
+aether-common = { version = "0.1.0", path = "../common" }
+tracing.workspace = true
 thiserror = { workspace = true }
+rodio = "0.22"
+
+[dev-dependencies]
+tempfile = "3.27.0"
