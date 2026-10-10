@@ -8,6 +8,6 @@ repository.workspace = true
 description = "Shared utilities and types"
 
 [dependencies]
-serde = { workspace = true }
-thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
 tracing = { workspace = true }
