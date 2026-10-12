@@ -1,5 +1,5 @@
 [package]
-name = "aether-player"
+name = "aether-desktop"
 version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
@@ -22,7 +22,9 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
+aether-core = { version = "0.1.0", path = "../../../crates/core" }
+aether-common = { version = "0.1.0", path = "../../../crates/common" }
+thiserror.workspace = true
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
