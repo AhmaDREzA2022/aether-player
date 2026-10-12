@@ -44,7 +44,7 @@ impl LocalPlayer {
         // Wait fo the thread to report whether the device opened.
         ready_rx.recv().map_err(|_| PlayerError::NoAudioDevice)??;
 
-        Ok(Self { tx: Mutex::new(tx)})
+        Ok(Self { tx: Mutex::new(tx) })
     }
 
     /// send a command to the audio thread and wait for its reply.
@@ -95,7 +95,6 @@ impl Player for LocalPlayer {
 }
 
 // ---------------- everything below runs on the audio thread ----------------
-
 
 fn audio_thread(rx: mpsc::Receiver<Cmd>, ready: mpsc::Sender<Result<(), PlayerError>>) {
     let device = match rodio::DeviceSinkBuilder::open_default_sink() {
@@ -185,7 +184,11 @@ impl Engine {
     fn seek(&mut self, pos: Duration) -> Result<(), PlayerError> {
         let player = self.player.as_ref().ok_or_else(no_track)?;
         let duration = self.track.as_ref().map(|t| t.duration).unwrap_or_default();
-        let pos = if duration.is_zero() { pos } else { pos.min(duration) };
+        let pos = if duration.is_zero() {
+            pos
+        } else {
+            pos.min(duration)
+        };
 
         player.try_seek(pos).map_err(|e| {
             tracing::warn!("seek failed: {e}");
@@ -216,7 +219,14 @@ impl Engine {
                 };
                 // rodio's position can overshoot the duration, so clamp it.
                 let pos = p.get_pos();
-                (state, if duration.is_zero() { pos } else { pos.min(duration) })
+                (
+                    state,
+                    if duration.is_zero() {
+                        pos
+                    } else {
+                        pos.min(duration)
+                    },
+                )
             }
         };
 
@@ -246,9 +256,6 @@ fn open_source(path: &Path) -> Result<rodio::Decoder<BufReader<File>>, PlayerErr
     rodio::Decoder::try_from(file)
         .map_err(|e| PlayerError::UnsupportedFormat(format!("{}: {e}", path.display())))
 }
-
-
-
 
 #[cfg(test)]
 mod tests {

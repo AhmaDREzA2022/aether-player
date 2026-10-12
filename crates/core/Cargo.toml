@@ -8,8 +8,8 @@ repository.workspace = true
 description = "Core logic: queue, playlist, player API, library management"
 
 [dependencies]
-aether-common = { path = "../common" }
+aether-common = { version = "0.1.0", path = "../common" }
 serde = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
+tracing.workspace = true
 chrono = { workspace = true }
