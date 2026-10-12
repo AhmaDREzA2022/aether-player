@@ -13,4 +13,16 @@ pub enum LibraryError {
 
     #[error("no track with id {0}")]
     TrackNotFound(i64),
+
+    #[error("no playlist with id {0}")]
+    PlaylistNotFound(i64),
+
+    #[error("a playlist named '{0}' already exists")]
+    PlaylistNameTaken(String),
+
+    #[error("playlist name can't be empty")]
+    InvalidName,
+
+    #[error("position {position} is out of range (playlist has {len} tracks)")]
+    PositionOutOfRange { position: usize, len: usize },
 }

@@ -27,6 +27,17 @@ const MIGRATIONS: &[&str] = &[
         id          INTEGER PRIMARY KEY,
         track_id    INTEGER NOT NULL UNIQUE REFERENCES tracks(id) ON DELETE CASCADE
     );",
+    // version 3: playlists
+    "CREATE TABLE playlists (
+        id   INTEGER PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE COLLATE NOCASE
+    );
+    CREATE TABLE playlist_tracks (
+        id          INTEGER PRIMARY KEY,
+        playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+        track_id    INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+        position    INTEGER NOT NULL
+    );",
 ];
 
 const TRACK_COLUMNS: &str = "tracks.id, tracks.path, tracks.title, tracks.artist, \
@@ -41,7 +52,12 @@ pub struct LibraryTrack {
     pub id: i64,
     pub track: Track,
 }
-
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Playlist {
+    pub id: i64,
+    pub name: String,
+    pub track_count: usize,
+}
 /// What a scan did.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SyncReport {
@@ -247,6 +263,178 @@ impl Library {
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
         Ok(rows.collect::<Result<HashMap<_, _>, _>>()?)
     }
+
+    /// All playlists, sorted by name.
+    pub fn playlists(&self) -> Result<Vec<Playlist>, LibraryError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.id, p.name, COUNT(pt.id)
+             FROM playlists p
+             LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
+             GROUP BY p.id
+             ORDER BY p.name COLLATE NOCASE",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(Playlist {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                track_count: r.get::<_, i64>(2)? as usize,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn create_playlist(&self, name: &str) -> Result<Playlist, LibraryError> {
+        let name = clean_name(name)?;
+        self.ensure_name_free(&name, None)?;
+        self.conn
+            .execute("INSERT INTO playlists (name) VALUES (?1)", [&name])?;
+        Ok(Playlist {
+            id: self.conn.last_insert_rowid(),
+            name,
+            track_count: 0,
+        })
+    }
+
+    pub fn rename_playlist(&self, playlist_id: i64, name: &str) -> Result<(), LibraryError> {
+        self.require_playlist(playlist_id)?;
+        let name = clean_name(name)?;
+        self.ensure_name_free(&name, Some(playlist_id))?;
+        self.conn.execute(
+            "UPDATE playlists SET name = ?1 WHERE id = ?2",
+            params![name, playlist_id],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a playlist. Its tracks stay in the library.
+    pub fn delete_playlist(&self, playlist_id: i64) -> Result<(), LibraryError> {
+        self.require_playlist(playlist_id)?;
+        self.conn
+            .execute("DELETE FROM playlists WHERE id = ?1", [playlist_id])?;
+        Ok(())
+    }
+
+    /// The tracks of a playlist, in playlist order.
+    pub fn playlist_tracks(&self, playlist_id: i64) -> Result<Vec<LibraryTrack>, LibraryError> {
+        self.require_playlist(playlist_id)?;
+        self.query_tracks(
+            "JOIN playlist_tracks pt ON pt.track_id = tracks.id
+             WHERE pt.playlist_id = ?1
+             ORDER BY pt.position",
+            [playlist_id],
+        )
+    }
+
+    /// Append tracks to the end of a playlist. All-or-nothing: if any id is
+    /// unknown, nothing is added.
+    pub fn add_to_playlist(
+        &mut self,
+        playlist_id: i64,
+        track_ids: &[i64],
+    ) -> Result<(), LibraryError> {
+        self.require_playlist(playlist_id)?;
+        for &track_id in track_ids {
+            self.require_track(track_id)?;
+        }
+
+        let tx = self.conn.transaction()?;
+        let mut next: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(position) + 1, 0) FROM playlist_tracks WHERE playlist_id = ?1",
+            [playlist_id],
+            |r| r.get(0),
+        )?;
+        for &track_id in track_ids {
+            tx.execute(
+                "INSERT INTO playlist_tracks (playlist_id, track_id, position)
+                 VALUES (?1, ?2, ?3)",
+                params![playlist_id, track_id, next],
+            )?;
+            next += 1;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Remove the entry at `position` (0-based) from a playlist.
+    pub fn remove_from_playlist(
+        &mut self,
+        playlist_id: i64,
+        position: usize,
+    ) -> Result<(), LibraryError> {
+        self.require_playlist(playlist_id)?;
+        let tx = self.conn.transaction()?;
+
+        let mut entries = ordered_entry_ids(&tx, playlist_id)?;
+        if position >= entries.len() {
+            return Err(LibraryError::PositionOutOfRange {
+                position,
+                len: entries.len(),
+            });
+        }
+        let removed = entries.remove(position);
+        tx.execute("DELETE FROM playlist_tracks WHERE id = ?1", [removed])?;
+        write_positions(&tx, &entries)?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Move the entry at `from` so that it ends up at index `to`.
+    /// For [a, b, c, d], `move_in_playlist(id, 0, 2)` gives [b, c, a, d].
+    pub fn move_in_playlist(
+        &mut self,
+        playlist_id: i64,
+        from: usize,
+        to: usize,
+    ) -> Result<(), LibraryError> {
+        self.require_playlist(playlist_id)?;
+        let tx = self.conn.transaction()?;
+
+        let mut entries = ordered_entry_ids(&tx, playlist_id)?;
+        let len = entries.len();
+        for position in [from, to] {
+            if position >= len {
+                return Err(LibraryError::PositionOutOfRange { position, len });
+            }
+        }
+        if from == to {
+            return Ok(());
+        }
+
+        let entry = entries.remove(from);
+        entries.insert(to, entry);
+        write_positions(&tx, &entries)?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn require_playlist(&self, playlist_id: i64) -> Result<(), LibraryError> {
+        let exists: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM playlists WHERE id = ?1)",
+            [playlist_id],
+            |r| r.get(0),
+        )?;
+        if exists {
+            Ok(())
+        } else {
+            Err(LibraryError::PlaylistNotFound(playlist_id))
+        }
+    }
+
+    /// Fails if another playlist already has this name (ignoring case).
+    fn ensure_name_free(&self, name: &str, except_id: Option<i64>) -> Result<(), LibraryError> {
+        let taken: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM playlists WHERE name = ?1 AND id != ?2)",
+            params![name, except_id.unwrap_or(-1)],
+            |r| r.get(0),
+        )?;
+        if taken {
+            Err(LibraryError::PlaylistNameTaken(name.to_string()))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// Apply every migration newer than the database's current version,
@@ -304,6 +492,32 @@ fn escape_like(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('%', "\\%")
         .replace('_', "\\_")
+}
+
+fn clean_name(name: &str) -> Result<String, LibraryError> {
+    let name = name.trim();
+    if name.is_empty() {
+        Err(LibraryError::InvalidName)
+    } else {
+        Ok(name.to_string())
+    }
+}
+
+/// The ids of a playlist's entries, in playlist order.
+fn ordered_entry_ids(conn: &Connection, playlist_id: i64) -> rusqlite::Result<Vec<i64>> {
+    let mut stmt =
+        conn.prepare("SELECT id FROM playlist_tracks WHERE playlist_id = ?1 ORDER BY position")?;
+    let rows = stmt.query_map([playlist_id], |r| r.get(0))?;
+    rows.collect()
+}
+
+/// Number the entries 0, 1, 2, ... in the order given.
+fn write_positions(conn: &Connection, ordered_entry_ids: &[i64]) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare("UPDATE playlist_tracks SET position = ?1 WHERE id = ?2")?;
+    for (position, entry_id) in ordered_entry_ids.iter().enumerate() {
+        stmt.execute(params![position as i64, entry_id])?;
+    }
+    Ok(())
 }
 
 fn row_to_track(row: &Row<'_>) -> rusqlite::Result<LibraryTrack> {
@@ -640,5 +854,205 @@ mod tests {
         let id = lib.tracks().unwrap()[0].id;
         lib.set_favorite(id, true).unwrap();
         assert!(lib.is_favorite(id).unwrap());
+    }
+
+    fn playlist_titles(lib: &Library, playlist_id: i64) -> Vec<String> {
+        titles(lib.playlist_tracks(playlist_id).unwrap())
+    }
+
+    /// Creates a playlist and fills it with the tracks having these titles.
+    fn playlist_with(lib: &mut Library, name: &str, track_titles: &[&str]) -> i64 {
+        let playlist = lib.create_playlist(name).unwrap();
+        let ids: Vec<i64> = track_titles.iter().map(|t| find(lib, t).id).collect();
+        lib.add_to_playlist(playlist.id, &ids).unwrap();
+        playlist.id
+    }
+
+    #[test]
+    fn creating_and_listing_playlists() {
+        let lib = Library::open_in_memory().unwrap();
+        let road = lib.create_playlist("  Road trip ").unwrap();
+        assert_eq!(road.name, "Road trip"); // trimmed
+        lib.create_playlist("Alpha").unwrap();
+
+        let all = lib.playlists().unwrap();
+        let names: Vec<_> = all.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["Alpha", "Road trip"]);
+        assert_eq!(all[1].track_count, 0);
+    }
+
+    #[test]
+    fn playlist_names_must_be_non_empty_and_unique_ignoring_case() {
+        let lib = Library::open_in_memory().unwrap();
+        lib.create_playlist("Road trip").unwrap();
+
+        assert!(matches!(
+            lib.create_playlist("   ").unwrap_err(),
+            LibraryError::InvalidName
+        ));
+        assert!(matches!(
+            lib.create_playlist("road TRIP").unwrap_err(),
+            LibraryError::PlaylistNameTaken(_)
+        ));
+    }
+
+    #[test]
+    fn renaming_checks_for_clashes_but_allows_changing_only_the_case() {
+        let lib = Library::open_in_memory().unwrap();
+        let alpha = lib.create_playlist("Alpha").unwrap();
+        lib.create_playlist("Beta").unwrap();
+
+        assert!(matches!(
+            lib.rename_playlist(alpha.id, "beta").unwrap_err(),
+            LibraryError::PlaylistNameTaken(_)
+        ));
+        lib.rename_playlist(alpha.id, "ALPHA").unwrap();
+        assert_eq!(lib.playlists().unwrap()[0].name, "ALPHA");
+    }
+
+    #[test]
+    fn tracks_are_appended_in_order_and_may_repeat() {
+        let mut lib = library_with_tags();
+        let id = playlist_with(
+            &mut lib,
+            "Mix",
+            &[
+                "Blue Monday",
+                "One More Time",
+                "Harder Better Faster Stronger",
+            ],
+        );
+        assert_eq!(
+            playlist_titles(&lib, id),
+            vec![
+                "Blue Monday",
+                "One More Time",
+                "Harder Better Faster Stronger"
+            ]
+        );
+
+        let monday = find(&lib, "Blue Monday").id;
+        lib.add_to_playlist(id, &[monday]).unwrap();
+        assert_eq!(playlist_titles(&lib, id).len(), 4);
+        assert_eq!(lib.playlists().unwrap()[0].track_count, 4);
+    }
+
+    #[test]
+    fn adding_an_unknown_track_adds_nothing() {
+        let mut lib = library_with_tags();
+        let playlist = lib.create_playlist("Mix").unwrap();
+        let known = find(&lib, "Blue Monday").id;
+
+        let err = lib
+            .add_to_playlist(playlist.id, &[known, 9999])
+            .unwrap_err();
+        assert!(matches!(err, LibraryError::TrackNotFound(9999)));
+        assert!(playlist_titles(&lib, playlist.id).is_empty());
+    }
+
+    #[test]
+    fn adding_to_an_unknown_playlist_is_an_error() {
+        let mut lib = library_with_tags();
+        let track = find(&lib, "Blue Monday").id;
+        let err = lib.add_to_playlist(777, &[track]).unwrap_err();
+        assert!(matches!(err, LibraryError::PlaylistNotFound(777)));
+    }
+
+    #[test]
+    fn removing_by_position_keeps_the_rest_in_order() {
+        let mut lib = library_with_tags();
+        let id = playlist_with(&mut lib, "Mix", &["Blue Monday", "One More Time", "Track"]);
+
+        lib.remove_from_playlist(id, 1).unwrap();
+        assert_eq!(playlist_titles(&lib, id), vec!["Blue Monday", "Track"]);
+
+        let err = lib.remove_from_playlist(id, 5).unwrap_err();
+        assert!(matches!(
+            err,
+            LibraryError::PositionOutOfRange {
+                position: 5,
+                len: 2
+            }
+        ));
+
+        // Adding afterwards still lands at the end.
+        let removed = find(&lib, "One More Time").id;
+        lib.add_to_playlist(id, &[removed]).unwrap();
+        assert_eq!(
+            playlist_titles(&lib, id),
+            vec!["Blue Monday", "Track", "One More Time"]
+        );
+    }
+
+    #[test]
+    fn moving_an_entry_reorders_the_playlist() {
+        let mut lib = library_with_tags();
+        let id = playlist_with(
+            &mut lib,
+            "Mix",
+            &[
+                "One More Time",
+                "Harder Better Faster Stronger",
+                "Blue Monday",
+                "100% Pure",
+            ],
+        );
+
+        lib.move_in_playlist(id, 0, 2).unwrap();
+        assert_eq!(
+            playlist_titles(&lib, id),
+            vec![
+                "Harder Better Faster Stronger",
+                "Blue Monday",
+                "One More Time",
+                "100% Pure"
+            ]
+        );
+
+        lib.move_in_playlist(id, 3, 0).unwrap();
+        assert_eq!(
+            playlist_titles(&lib, id),
+            vec![
+                "100% Pure",
+                "Harder Better Faster Stronger",
+                "Blue Monday",
+                "One More Time"
+            ]
+        );
+
+        lib.move_in_playlist(id, 1, 1).unwrap(); // no-op
+        assert!(lib.move_in_playlist(id, 0, 9).is_err());
+        assert_eq!(playlist_titles(&lib, id).len(), 4);
+    }
+
+    #[test]
+    fn deleting_a_playlist_keeps_the_tracks() {
+        let mut lib = library_with_tags();
+        let id = playlist_with(&mut lib, "Mix", &["Blue Monday"]);
+
+        lib.delete_playlist(id).unwrap();
+        assert!(lib.playlists().unwrap().is_empty());
+        assert!(matches!(
+            lib.playlist_tracks(id).unwrap_err(),
+            LibraryError::PlaylistNotFound(_)
+        ));
+        assert_eq!(lib.track_count().unwrap(), 5);
+    }
+
+    #[test]
+    fn a_deleted_file_drops_out_of_playlists_without_breaking_them() {
+        let dir = music_dir();
+        write_silent_wav(&dir.path().join("c.wav"), 1);
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_folder(dir.path()).unwrap();
+        let id = playlist_with(&mut lib, "All", &["a", "b", "c"]);
+
+        fs::remove_file(dir.path().join("sub/b.wav")).unwrap();
+        lib.sync_folder(dir.path()).unwrap();
+        assert_eq!(playlist_titles(&lib, id), vec!["a", "c"]);
+
+        // Positions are indexes into the list, so the gap left by "b" doesn't matter.
+        lib.remove_from_playlist(id, 1).unwrap();
+        assert_eq!(playlist_titles(&lib, id), vec!["a"]);
     }
 }

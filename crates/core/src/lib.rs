@@ -14,6 +14,6 @@ mod ticker;
 
 pub use controller::PlaybackController;
 pub use error::LibraryError;
-pub use library::{Library, LibraryTrack, SyncReport};
+pub use library::{Library, LibraryTrack, Playlist, SyncReport};
 pub use queue::Queue;
 pub use ticker::{spawn_ticker, DEFAULT_TICK_INTERVAL};
