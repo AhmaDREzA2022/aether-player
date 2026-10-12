@@ -5,11 +5,15 @@
 // Placeholder – real implementation comes in later commits.
 
 mod controller;
+mod error;
+mod library;
 mod queue;
-mod ticker;
 #[cfg(test)]
 mod test_util;
+mod ticker;
 
 pub use controller::PlaybackController;
+pub use error::LibraryError;
+pub use library::{Library, LibraryTrack, SyncReport};
 pub use queue::Queue;
 pub use ticker::{spawn_ticker, DEFAULT_TICK_INTERVAL};

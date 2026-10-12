@@ -13,3 +13,8 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 tracing.workspace = true
 chrono = { workspace = true }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+aether-metadata = { version = "0.1.0", path = "../metadata" }
+
+[dev-dependencies]
+tempfile = "3.27.0"

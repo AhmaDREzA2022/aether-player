@@ -1,7 +1,7 @@
 use aether_common::{PlayerError, Track};
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::tag::Accessor;
-use std::path::{Path};
+use std::path::{Path, PathBuf};
 use walkdir::{DirEntry, WalkDir};
 
 pub const SUPPORTED_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "wav", "m4a"];
@@ -45,27 +45,34 @@ pub fn read_track(path: &Path) -> Result<Track, PlayerError> {
     })
 }
 
-/// Recursively scan a folder. Hidden files/folders and unsupported
-/// extensions are skipped; files that fail to read are logged and skipped.
-/// Results are sorted by path so order is stable.
-pub fn scan_folder(root: &Path) -> Vec<Track> {
-    let mut tracks: Vec<Track> = WalkDir::new(root)
+/// Find supported audio files under `root` without reading their tags.
+/// Hidden files and folders are skipped. The result is sorted by path.
+pub fn find_audio_files(root: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = WalkDir::new(root)
         .into_iter()
         .filter_entry(|e| !is_hidden(e))
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
         .filter(|e| has_supported_extensions(e.path()))
-        .filter_map(|e| match read_track(e.path()) {
+        .map(|e| e.into_path())
+        .collect();
+    files.sort();
+    files
+}
+
+/// Recursively scan a folder and read every supported file.
+/// Files that fail to read are logged and skipped.
+pub fn scan_folder(root: &Path) -> Vec<Track> {
+    find_audio_files(root)
+        .iter()
+        .filter_map(|path| match read_track(path) {
             Ok(track) => Some(track),
             Err(err) => {
-                tracing::warn!("skipping {}: {err}", e.path().display());
+                tracing::warn!("skipping {}: {err}", path.display());
                 None
             }
         })
-        .collect();
-
-    tracks.sort_by(|a, b| a.path.cmp(&b.path));
-    tracks
+        .collect()
 }
 
 fn is_hidden(entry: &DirEntry) -> bool {
@@ -88,7 +95,6 @@ fn file_stem(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    
 
     use super::*;
     use std::path::Path;

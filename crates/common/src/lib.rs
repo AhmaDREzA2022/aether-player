@@ -5,6 +5,7 @@
 // Placeholder – real implementation comes in later commits.
 mod error;
 pub mod mock;
+#[doc(hidden)] pub mod testing;
 mod player;
 mod track;
 
