@@ -1,5 +1,4 @@
 use crate::{
-    mock::Call::{Next, Prev},
     PlaybackState, Player, PlayerError, PlayerStatus, Track,
 };
 use std::{sync::Mutex, time::Duration};

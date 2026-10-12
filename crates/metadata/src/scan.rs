@@ -1,8 +1,7 @@
-use aether_common::{Player, PlayerError, Track};
-use lofty::file::{AudioFile, TaggedFile, TaggedFileExt};
+use aether_common::{PlayerError, Track};
+use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::tag::Accessor;
-use std::path::{self, Path};
-use std::time::Duration;
+use std::path::{Path};
 use walkdir::{DirEntry, WalkDir};
 
 pub const SUPPORTED_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "wav", "m4a"];
@@ -89,7 +88,7 @@ fn file_stem(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::scan;
+    
 
     use super::*;
     use std::path::Path;

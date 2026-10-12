@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "apps/cli",
     "crates/core",
     "crates/audio",
     "crates/metadata",

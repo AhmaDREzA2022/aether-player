@@ -1,8 +1,5 @@
 use aether_common::{PlaybackState, Player, PlayerError, PlayerStatus, Track};
 use rodio::Player as RodioPlayer;
-use std::error::Error;
-use std::future::ready;
-use std::task::Poll::Ready;
 use std::{
     fs::File,
     io::{self, BufReader},

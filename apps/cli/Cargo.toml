@@ -1,0 +1,16 @@
+[package]
+name = "aether-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Command-line player used to test Aether"
+
+[dependencies]
+aether-common = { path = "../../crates/common" }
+aether-core = { path = "../../crates/core" }
+aether-audio = { path = "../../crates/audio" }
+aether-metadata = { path = "../../crates/metadata" }
+tracing.workspace = true
+tracing-subscriber.workspace = true
