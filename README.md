@@ -24,6 +24,7 @@ aether-player/
 │   ├── discovery/     # mDNS + pairing
 │   └── common/        # Shared utilities
 ├── apps/
+│   ├── cli/           # Terminal player for testing the core
 │   ├── desktop/       # Tauri (Linux first)
 │   └── android/
 ├── protocol/          # Shared DTOs (serde)
@@ -35,19 +36,21 @@ aether-player/
 Everything goes through a `Player` trait:
 
 ```rust
-trait Player {
-    fn play(&self);
-    fn pause(&self);
-    fn seek(&self, pos: Duration);
-    fn next(&self);
-    fn prev(&self);
-    fn set_volume(&self, vol: f32);
-    fn status(&self) -> PlayerStatus;
+pub trait Player: Send + Sync {
+    fn load(&self, track: &Track) -> Result<(), PlayerError>;
+    fn play(&self) -> Result<(), PlayerError>;
+    fn pause(&self) -> Result<(), PlayerError>;
+    fn seek(&self, pos: Duration) -> Result<(), PlayerError>;
+    fn next(&self) -> Result<(), PlayerError>;
+    fn prev(&self) -> Result<(), PlayerError>;
+    fn set_volume(&self, vol: f32) -> Result<(), PlayerError>;
+    fn status(&self) -> Result<PlayerStatus, PlayerError>;
 }
 ```
 
-- `LocalPlayer` → on-device playback
-- `RemotePlayer` → talks over WebSocket
+- `LocalPlayer` → on-device playback (rodio, on a dedicated audio thread)
+- `PlaybackController` → wraps any `Player`, adds the queue so `next`/`prev` work
+- `RemotePlayer` → talks over WebSocket (V2)
 
 The UI never knows (or cares) whether the music is local or remote.
 
@@ -65,6 +68,22 @@ The UI never knows (or cares) whether the music is local or remote.
 
 GPL-3.0-only
 
+## Building
+
+Requirements: Rust (stable). On Debian/Ubuntu/Kali: `sudo apt install libasound2-dev pkg-config`.
+
+```bash
+cargo test --workspace
+cargo run -p aether-cli -- --list ~/Music      # scan and print, no audio
+cargo run --release -p aether-cli -- ~/Music   # play a folder
+```
+
 ## Status
 
-🚧 Early development – project skeleton only.
+| Milestone | State |
+|-----------|-------|
+| V1.0 Playback core | ✅ done |
+| V1.1 Library & history | 🚧 in progress |
+| V1.2 Desktop shell (Tauri) | planned |
+| V1.3 Desktop polish | planned |
+| V1.4 Linux integration (MPRIS) | planned |
