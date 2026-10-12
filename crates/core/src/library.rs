@@ -1,12 +1,13 @@
 use crate::error::LibraryError;
 use aether_common::Track;
 use aether_metadata::{find_audio_files, read_track};
+use rusqlite::OptionalExtension;
 use rusqlite::{params, params_from_iter, Connection, Row};
 use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    time::{Duration, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 /// One entry per schema version. Never edit an old entry: add a new one.
@@ -38,6 +39,13 @@ const MIGRATIONS: &[&str] = &[
         track_id    INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
         position    INTEGER NOT NULL
     );",
+    // version 4: play history
+    "CREATE TABLE play_history (
+        id        INTEGER PRIMARY KEY,
+        track_id  INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+        played_at INTEGER NOT NULL
+    );
+    CREATE INDEX idx_play_history_track ON play_history(track_id);",
 ];
 
 const TRACK_COLUMNS: &str = "tracks.id, tracks.path, tracks.title, tracks.artist, \
@@ -434,6 +442,73 @@ impl Library {
         } else {
             Ok(())
         }
+    }
+
+    /// The library id of the track stored at this path, if any.
+    pub fn track_id_by_path(&self, path: &Path) -> Result<Option<i64>, LibraryError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM tracks WHERE path = ?1",
+                params![path.to_string_lossy()],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn record_play(&self, track_id: i64) -> Result<(), LibraryError> {
+        self.record_play_at(track_id, SystemTime::now())
+    }
+
+    /// Like `record_play`, with an explicit time (used by tests).
+    pub fn record_play_at(&self, track_id: i64, at: SystemTime) -> Result<(), LibraryError> {
+        self.require_track(track_id)?;
+        let ms = at
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        self.conn.execute(
+            "INSERT INTO play_history (track_id, played_at) VALUES (?1, ?2)",
+            params![track_id, ms],
+        )?;
+        Ok(())
+    }
+
+    pub fn play_count(&self, track_id: i64) -> Result<usize, LibraryError> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM play_history WHERE track_id = ?1",
+            [track_id],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
+    }
+
+    /// Each played track once, most recently played first.
+    pub fn recently_played(&self, limit: usize) -> Result<Vec<LibraryTrack>, LibraryError> {
+        self.query_tracks(
+            "JOIN (SELECT track_id, MAX(played_at) AS last_at, MAX(id) AS last_id
+                   FROM play_history GROUP BY track_id) h ON h.track_id = tracks.id
+             ORDER BY h.last_at DESC, h.last_id DESC
+             LIMIT ?1",
+            [limit as i64],
+        )
+    }
+
+    /// Tracks with their play counts, most played first. Ties go to the
+    /// track played most recently.
+    pub fn most_played(&self, limit: usize) -> Result<Vec<(LibraryTrack, usize)>, LibraryError> {
+        let sql = format!(
+            "SELECT {TRACK_COLUMNS}, COUNT(h.id) AS plays
+             FROM tracks JOIN play_history h ON h.track_id = tracks.id
+             GROUP BY tracks.id
+             ORDER BY plays DESC, MAX(h.played_at) DESC, MAX(h.id) DESC
+             LIMIT ?1"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([limit as i64], |row| {
+            Ok((row_to_track(row)?, row.get::<_, i64>(7)? as usize))
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 }
 
@@ -1054,5 +1129,88 @@ mod tests {
         // Positions are indexes into the list, so the gap left by "b" doesn't matter.
         lib.remove_from_playlist(id, 1).unwrap();
         assert_eq!(playlist_titles(&lib, id), vec!["a"]);
+    }
+
+    fn at(secs: u64) -> SystemTime {
+        UNIX_EPOCH + Duration::from_secs(secs)
+    }
+
+    #[test]
+    fn recently_played_lists_each_track_once_newest_first() {
+        let lib = library_with_tags();
+        let monday = find(&lib, "Blue Monday").id;
+        let one_more = find(&lib, "One More Time").id;
+        lib.record_play_at(monday, at(100)).unwrap();
+        lib.record_play_at(one_more, at(200)).unwrap();
+        lib.record_play_at(monday, at(300)).unwrap();
+
+        assert_eq!(
+            titles(lib.recently_played(10).unwrap()),
+            vec!["Blue Monday", "One More Time"]
+        );
+        assert_eq!(titles(lib.recently_played(1).unwrap()), vec!["Blue Monday"]);
+    }
+
+    #[test]
+    fn most_played_orders_by_count_then_recency() {
+        let lib = library_with_tags();
+        let monday = find(&lib, "Blue Monday").id;
+        let one_more = find(&lib, "One More Time").id;
+        let track = find(&lib, "Track").id;
+        for t in [10, 20, 30] {
+            lib.record_play_at(monday, at(t)).unwrap();
+        }
+        lib.record_play_at(one_more, at(500)).unwrap();
+        lib.record_play_at(track, at(100)).unwrap();
+
+        let top = lib.most_played(10).unwrap();
+        let summary: Vec<_> = top
+            .iter()
+            .map(|(t, n)| (t.track.title.as_str(), *n))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![("Blue Monday", 3), ("One More Time", 1), ("Track", 1)]
+        );
+        assert_eq!(lib.most_played(1).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn unplayed_tracks_are_not_in_the_history_lists() {
+        let lib = library_with_tags();
+        assert!(lib.recently_played(10).unwrap().is_empty());
+        assert!(lib.most_played(10).unwrap().is_empty());
+        assert_eq!(lib.play_count(find(&lib, "Track").id).unwrap(), 0);
+    }
+
+    #[test]
+    fn recording_a_play_for_an_unknown_track_is_an_error() {
+        let lib = Library::open_in_memory().unwrap();
+        let err = lib.record_play(4242).unwrap_err();
+        assert!(matches!(err, LibraryError::TrackNotFound(4242)));
+    }
+
+    #[test]
+    fn tracks_can_be_looked_up_by_path() {
+        let dir = music_dir();
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_folder(dir.path()).unwrap();
+
+        let a = find(&lib, "a");
+        assert_eq!(lib.track_id_by_path(&a.track.path).unwrap(), Some(a.id));
+        assert_eq!(lib.track_id_by_path(Path::new("/nope.mp3")).unwrap(), None);
+    }
+
+    #[test]
+    fn history_goes_away_with_the_file() {
+        let dir = music_dir();
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_folder(dir.path()).unwrap();
+        lib.record_play(find(&lib, "b").id).unwrap();
+
+        fs::remove_file(dir.path().join("sub/b.wav")).unwrap();
+        lib.sync_folder(dir.path()).unwrap();
+
+        assert!(lib.recently_played(10).unwrap().is_empty());
     }
 }
