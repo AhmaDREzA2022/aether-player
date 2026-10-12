@@ -10,4 +10,7 @@ pub enum LibraryError {
 
     #[error("database schema version {found} is newer than this app supports ({supported})")]
     SchemaTooNew { found: i64, supported: i64 },
+
+    #[error("no track with id {0}")]
+    TrackNotFound(i64),
 }
