@@ -40,6 +40,20 @@ impl PlaybackController {
         }
     }
 
+    /// Replace the queue with `tracks` and start playing at `start`.
+    pub fn play_queue(
+        &self,
+        tracks: impl IntoIterator<Item = Track>,
+        start: usize,
+    ) -> Result<(), PlayerError> {
+        {
+            let mut q = self.queue();
+            q.clear();
+            q.extend(tracks);
+        }
+        self.play_index(start)
+    }
+
     /// Call this regularly (every ~500 ms). If the current track finished,
     /// it moves on to the next one. Kept separate from any thread so it can
     /// be tested by simply calling it.
@@ -89,21 +103,26 @@ impl Player for PlaybackController {
     }
 
     fn play(&self) -> Result<(), PlayerError> {
-        // Nothing loaded yet: start the queue from its current (or first) track.
-        if self.player.status()?.track.is_none() {
-            let track = {
-                let mut q = self.queue();
-                if q.current().is_none() {
-                    q.next_track();
+        let status = self.player.status()?;
+        match status.track {
+            // Nothing loaded yet: start the queue from its current (or first) track.
+            None => {
+                let track = {
+                    let mut q = self.queue();
+                    if q.current().is_none() {
+                        q.next_track();
+                    }
+                    q.current().cloned()
+                };
+                match track {
+                    Some(t) => self.load_and_play(&t),
+                    None => Err(PlayerError::NotFound("queue is empty".into())),
                 }
-                q.current().cloned()
-            };
-            return match track {
-                Some(t) => self.load_and_play(&t),
-                None => Err(PlayerError::NotFound("queue is empty".into())),
-            };
+            }
+            // The track ran to its end: play it again from the start.
+            Some(track) if status.state == PlaybackState::Finished => self.load_and_play(&track),
+            Some(_) => self.player.play(),
         }
-        self.player.play()
     }
 
     fn pause(&self) -> Result<(), PlayerError> {
@@ -248,5 +267,34 @@ mod tests {
         c.play().unwrap();
         c.tick();
         assert_eq!(mock.calls().len(), 2);
+    }
+
+    #[test]
+    fn play_queue_replaces_the_queue_and_starts_at_the_index() {
+        let (mock, c) = setup(5);
+        c.play().unwrap();
+        c.play_queue((10..13).map(track), 1).unwrap();
+
+        assert_eq!(mock.calls()[2..], [Call::Load(track(11)), Call::Play]);
+        assert_eq!(c.queue_snapshot().len(), 3);
+
+        c.next().unwrap();
+        assert_eq!(mock.calls()[4..], [Call::Load(track(12)), Call::Play]);
+    }
+
+    #[test]
+    fn play_queue_with_a_bad_start_index_is_an_error() {
+        let (_mock, c) = setup(0);
+        assert!(c.play_queue((0..2).map(track), 5).is_err());
+    }
+
+    #[test]
+    fn play_after_the_queue_ended_restarts_the_last_track() {
+        let (mock, c) = setup(1);
+        c.play().unwrap();
+        set_state(&mock, PlaybackState::Finished, Duration::from_secs(100));
+
+        c.play().unwrap();
+        assert_eq!(mock.calls()[2..], [Call::Load(track(0)), Call::Play]);
     }
 }

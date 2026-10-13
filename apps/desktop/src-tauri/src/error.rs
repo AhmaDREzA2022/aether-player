@@ -1,4 +1,5 @@
 use aether_core::LibraryError;
+use aether_common::PlayerError;
 use serde::{Serialize, Serializer};
 
 /// the error type commands return. tauri sends errors to the fronntend as
@@ -7,6 +8,9 @@ use serde::{Serialize, Serializer};
 pub enum AppError {
     #[error(transparent)]
     Library(#[from] LibraryError),
+
+    #[error(transparent)]
+    Player(#[from] PlayerError),
 
     #[error("{0}")]
     Other(String),

@@ -1,11 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, SyncReport, Track } from "./api";
+import { NowPlayingBar } from "./NowPlayingBar";
+import { TrackTable } from "./TrackTable";
+import { usePlayerStatus } from "./usePlayerStatus";
 import "./App.css";
-
-function formatTime(ms: number): string {
-  const total = Math.floor(ms / 1000);
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
-}
 
 function describe(r: SyncReport): string {
   return `Scan finished: ${r.added} added, ${r.updated} updated, ${r.removed} removed, ${r.failed} failed`;
@@ -15,11 +13,14 @@ export default function App() {
   const [folder, setFolder] = useState("");
   const [query, setQuery] = useState("");
   const [tracks, setTracks] = useState<Track[]>([]);
+  const [shownQuery, setShownQuery] = useState(""); // the query `tracks` came from
   const [message, setMessage] = useState("");
   const [scanning, setScanning] = useState(false);
   const [version, setVersion] = useState(0); // bump this to reload the list
 
-  // Prefill the folder box once, when the app starts.
+  const status = usePlayerStatus();
+  const playingPath = status?.track?.path ?? null;
+
   useEffect(() => {
     api
       .defaultMusicDir()
@@ -27,22 +28,21 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // Load the list whenever the search text changes or a scan finishes.
   useEffect(() => {
     let cancelled = false;
     const timer = setTimeout(() => {
       const request = query.trim() ? api.searchTracks(query) : api.listTracks();
       request
         .then((result) => {
-          if (!cancelled) setTracks(result);
+          if (cancelled) return;
+          setTracks(result);
+          setShownQuery(query);
         })
         .catch((e) => {
           if (!cancelled) setMessage(String(e));
         });
     }, 150);
 
-    // Runs before the next effect: drop the pending timer and ignore a
-    // slow answer to an older query.
     return () => {
       cancelled = true;
       clearTimeout(timer);
@@ -62,6 +62,16 @@ export default function App() {
       setScanning(false);
     }
   }
+
+  // Double-click: queue the list as shown and start at that row.
+  const play = useCallback(
+    (index: number) => {
+      api
+        .playList(shownQuery, index)
+        .catch((e) => setMessage(`Could not play: ${e}`));
+    },
+    [shownQuery],
+  );
 
   return (
     <div className="app">
@@ -94,28 +104,11 @@ export default function App() {
               : "No tracks yet. Scan a folder to get started."}
           </p>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Title</th>
-                <th>Artist</th>
-                <th>Album</th>
-                <th className="time">Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tracks.map((t) => (
-                <tr key={t.id}>
-                  <td>{t.title}</td>
-                  <td>{t.artist}</td>
-                  <td>{t.album}</td>
-                  <td className="time">{formatTime(t.durationMs)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <TrackTable tracks={tracks} playingPath={playingPath} onPlay={play} />
         )}
       </main>
+
+      <NowPlayingBar status={status} onError={setMessage} />
     </div>
   );
 }

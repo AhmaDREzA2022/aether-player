@@ -126,3 +126,97 @@ tbody tr:hover {
     color: var(--muted);
     width: 70px;
 }
+
+tbody tr {
+    cursor: default;
+    user-select: none;
+}
+
+tbody tr.playing {
+    background: var(--row-hover);
+    color: var(--accent);
+}
+
+input[type="range"] {
+    padding: 0;
+    background: transparent;
+    border: none;
+    accent-color: var(--accent);
+}
+
+.player {
+    display: grid;
+    grid-template-columns: 1fr 2fr 1fr;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 16px;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+}
+
+.now {
+    min-width: 0;
+}
+
+.now-title,
+.now-artist {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.now-title {
+    font-weight: 600;
+}
+
+.now-artist {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.transport {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.buttons {
+    display: flex;
+    gap: 8px;
+}
+
+.buttons button {
+    min-width: 64px;
+}
+
+.seek {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.seek input[type="range"] {
+    flex: 1;
+}
+
+.clock {
+    width: 40px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.volume {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    color: var(--muted);
+}
+
+.volume input {
+    width: 120px;
+}

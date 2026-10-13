@@ -15,7 +15,7 @@ mod ticker;
 
 pub use controller::PlaybackController;
 pub use error::LibraryError;
-pub use history::{play_threshold, PlayTracker};
+pub use history::{play_threshold, record_if_due, PlayTracker};
 pub use library::{Library, LibraryTrack, Playlist, SyncReport};
 pub use queue::Queue;
 pub use ticker::{spawn_ticker, DEFAULT_TICK_INTERVAL};

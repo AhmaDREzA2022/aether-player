@@ -1,3 +1,4 @@
+use crate::{Library, LibraryError};
 use aether_common::{PlaybackState, PlayerStatus};
 use std::{path::PathBuf, time::Duration};
 
@@ -52,6 +53,26 @@ impl PlayTracker {
 
         self.counted = true;
         Some(track.path.clone())
+    }
+}
+
+/// Feed the tracker a status; if a play is due, store it in the library.
+/// Returns whether a play was recorded. A track that isn't in the library
+/// is ignored.
+pub fn record_if_due(
+    tracker: &mut PlayTracker,
+    status: &PlayerStatus,
+    library: &Library,
+) -> Result<bool, LibraryError> {
+    let Some(path) = tracker.observe(status) else {
+        return Ok(false);
+    };
+    match library.track_id_by_path(&path)? {
+        Some(id) => {
+            library.record_play(id)?;
+            Ok(true)
+        }
+        None => Ok(false),
     }
 }
 
@@ -150,5 +171,31 @@ mod tests {
         assert!(t.observe(&unloaded).is_none());
 
         assert!(t.observe(&status("a.mp3", Playing, 40, 300)).is_some());
+    }
+
+    #[test]
+    fn due_plays_are_stored_in_the_library() {
+        let dir = tempfile::tempdir().unwrap();
+        aether_common::testing::write_silent_wav(&dir.path().join("a.wav"), 60);
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_folder(dir.path()).unwrap();
+        let stored = lib.tracks().unwrap().remove(0);
+        let path = stored.track.path.to_string_lossy().into_owned();
+
+        let mut tracker = PlayTracker::new();
+        assert!(!record_if_due(&mut tracker, &status(&path, Playing, 10, 60), &lib).unwrap());
+        assert!(record_if_due(&mut tracker, &status(&path, Playing, 31, 60), &lib).unwrap());
+        assert!(!record_if_due(&mut tracker, &status(&path, Playing, 40, 60), &lib).unwrap());
+        assert_eq!(lib.play_count(stored.id).unwrap(), 1);
+    }
+
+    #[test]
+    fn plays_of_tracks_outside_the_library_are_ignored() {
+        let lib = Library::open_in_memory().unwrap();
+        let mut tracker = PlayTracker::new();
+        let s = status("/elsewhere/x.mp3", Playing, 40, 60);
+
+        assert!(!record_if_due(&mut tracker, &s, &lib).unwrap());
+        assert!(lib.recently_played(10).unwrap().is_empty());
     }
 }
