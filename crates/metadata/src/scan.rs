@@ -28,7 +28,7 @@ pub fn read_track(path: &Path) -> Result<Track, PlayerError> {
         .and_then(|t| text(t.title()))
         .unwrap_or_else(|| file_stem(path));
     let artist = tag
-        .and_then(|t| text(t.title()))
+        .and_then(|t| text(t.artist()))
         .unwrap_or_else(|| "Unknown artist".to_string());
     let album = tag
         .and_then(|t| text(t.album()))
@@ -167,5 +167,28 @@ mod tests {
     fn reading_a_missing_returns_not_found() {
         let err = read_track(Path::new("/definitely/not/here.mp3")).unwrap_err();
         assert!(matches!(err, PlayerError::NotFound(_)));
+    }
+
+    #[test]
+    fn tags_are_read_into_the_right_fields() {
+        use lofty::config::WriteOptions;
+        use lofty::tag::{Tag, TagExt, TagType};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("song.wav");
+        write_silent_wav(&path, 1);
+
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.set_title("The Title".to_string());
+        tag.set_artist("The Artist".to_string());
+        tag.set_album("The Album".to_string());
+        tag.set_track(7);
+        tag.save_to_path(&path, WriteOptions::default()).unwrap();
+
+        let track = read_track(&path).unwrap();
+        assert_eq!(track.title, "The Title");
+        assert_eq!(track.artist, "The Artist");
+        assert_eq!(track.album, "The Album");
+        assert_eq!(track.track_no, Some(7));
     }
 }
