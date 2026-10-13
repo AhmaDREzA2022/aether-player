@@ -1,7 +1,7 @@
 use crate::{error::AppError, AppState};
 use aether_common::{PlaybackState, Player, PlayerStatus, Track};
-use aether_core::{LibraryTrack, SyncReport};
-use serde::Serialize;
+use aether_core::{Library, LibraryError, LibraryTrack, SyncReport};
+use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, time::Duration};
 use tauri::{Manager, State};
 
@@ -16,6 +16,7 @@ pub struct TrackDto {
     album: String,
     duration_ms: u64,
     track_no: Option<u32>,
+    plays: Option<usize>,
 }
 
 impl From<LibraryTrack> for TrackDto {
@@ -28,6 +29,7 @@ impl From<LibraryTrack> for TrackDto {
             album: t.track.album,
             duration_ms: t.track.duration.as_millis() as u64,
             track_no: t.track.track_no,
+            plays: None,
         }
     }
 }
@@ -71,17 +73,6 @@ pub fn scan_folder(state: State<'_, AppState>, path: String) -> Result<SyncRepor
     Ok(report.into())
 }
 
-#[tauri::command(async)]
-pub fn list_tracks(state: State<'_, AppState>) -> Result<Vec<TrackDto>, AppError> {
-    let tracks = state.library().tracks()?;
-    Ok(tracks.into_iter().map(TrackDto::from).collect())
-}
-
-#[tauri::command(async)]
-pub fn search_tracks(state: State<'_, AppState>, query: String) -> Result<Vec<TrackDto>, AppError> {
-    let tracks = state.library().search(&query)?;
-    Ok(tracks.into_iter().map(TrackDto::from).collect())
-}
 
 /// What the now-playing bar needs to know about the loaded track.
 #[derive(Debug, Serialize)]
@@ -125,19 +116,78 @@ impl From<PlayerStatus> for StatusDto {
     }
 }
 
-/// Play the results of a search (an empty query means the whole library),
-/// starting at the clicked row. The list in the window and the queue come
-/// from the same query, so they match.
+/// Which list the UI is showing. It arrives from the frontend as JSON like
+/// `{ "kind": "library", "query": "daft" }` or `{ "kind": "favorites" }`.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ListSource {
+    Library { query: String },
+    Favorites,
+    Recent,
+    MostPlayed,
+}
+
+const HISTORY_LIMIT: usize = 100;
+
+/// The tracks of a source, each with a play count where that applies.
+fn load_source(
+    library: &Library,
+    source: &ListSource,
+) -> Result<Vec<(LibraryTrack, Option<usize>)>, LibraryError> {
+    let plain = |tracks: Vec<LibraryTrack>| tracks.into_iter().map(|t| (t, None)).collect();
+    Ok(match source {
+        ListSource::Library { query } => plain(library.search(query)?),
+        ListSource::Favorites => plain(library.favorites()?),
+        ListSource::Recent => plain(library.recently_played(HISTORY_LIMIT)?),
+        ListSource::MostPlayed => library
+            .most_played(HISTORY_LIMIT)?
+            .into_iter()
+            .map(|(t, plays)| (t, Some(plays)))
+            .collect(),
+    })
+}
+
 #[tauri::command(async)]
-pub fn play_list(state: State<'_, AppState>, query: String, start: usize) -> Result<(), AppError> {
-    let tracks: Vec<Track> = state
-        .library()
-        .search(&query)?
+pub fn list_source(
+    state: State<'_, AppState>,
+    source: ListSource,
+) -> Result<Vec<TrackDto>, AppError> {
+    let rows = load_source(&state.library(), &source)?;
+    Ok(rows
         .into_iter()
-        .map(|t| t.track)
+        .map(|(track, plays)| {
+            let mut dto = TrackDto::from(track);
+            dto.plays = plays;
+            dto
+        })
+        .collect())
+}
+
+/// Queue the source's tracks, in the order the window shows them, and start
+/// at the clicked row.
+#[tauri::command(async)]
+pub fn play_source(
+    state: State<'_, AppState>,
+    source: ListSource,
+    start: usize,
+) -> Result<(), AppError> {
+    let tracks: Vec<Track> = load_source(&state.library(), &source)?
+        .into_iter()
+        .map(|(t, _)| t.track)
         .collect();
     state.player()?.play_queue(tracks, start)?;
     Ok(())
+}
+
+#[tauri::command(async)]
+pub fn favorite_ids(state: State<'_, AppState>) -> Result<Vec<i64>, AppError> {
+    Ok(state.library().favorite_ids()?)
+}
+
+/// Flip a track's favorite flag and return the new state.
+#[tauri::command(async)]
+pub fn toggle_favorite(state: State<'_, AppState>, track_id: i64) -> Result<bool, AppError> {
+    Ok(state.library().toggle_favorite(track_id)?)
 }
 
 #[tauri::command(async)]
@@ -199,6 +249,7 @@ mod tests {
                 duration: Duration::from_millis(61_500),
                 track_no: Some(3),
             },
+        
         });
 
         let json = serde_json::to_value(&dto).unwrap();
@@ -206,6 +257,7 @@ mod tests {
         assert_eq!(json["path"], "/m/a.mp3");
         assert_eq!(json["durationMs"], 61_500);
         assert_eq!(json["trackNo"], 3);
+        assert!(json["plays"].is_null());
     }
 
     #[test]
@@ -224,5 +276,15 @@ mod tests {
         assert_eq!(json["durationMs"], 60_000);
         assert_eq!(json["volume"], 0.5);
         assert!(json["track"].is_null());
+    }
+
+        #[test]
+    fn list_source_parses_the_frontend_json() {
+        let q: ListSource =
+            serde_json::from_str(r#"{"kind":"library","query":"daft"}"#).unwrap();
+        assert!(matches!(q, ListSource::Library { query } if query == "daft"));
+
+        let m: ListSource = serde_json::from_str(r#"{"kind":"mostPlayed"}"#).unwrap();
+        assert!(matches!(m, ListSource::MostPlayed));
     }
 }

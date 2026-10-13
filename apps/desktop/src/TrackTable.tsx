@@ -5,40 +5,60 @@ import { formatTime } from "./format";
 interface Props {
   tracks: Track[];
   playingPath: string | null;
+  favorites: Set<number>;
+  showPlays: boolean;
   onPlay: (index: number) => void;
+  onToggleFavorite: (trackId: number) => void;
 }
 
-// `memo` makes React skip re-drawing this table when its props are
-// unchanged. The player status updates four times a second, and without
-// this the whole list would be redrawn each time.
 export const TrackTable = memo(function TrackTable({
   tracks,
   playingPath,
+  favorites,
+  showPlays,
   onPlay,
+  onToggleFavorite,
 }: Props) {
   return (
     <table>
       <thead>
         <tr>
+          <th className="fav-col" aria-label="Favorite" />
           <th>Title</th>
           <th>Artist</th>
           <th>Album</th>
+          {showPlays && <th className="time">Plays</th>}
           <th className="time">Time</th>
         </tr>
       </thead>
       <tbody>
-        {tracks.map((t, i) => (
-          <tr
-            key={t.id}
-            className={t.path === playingPath ? "playing" : undefined}
-            onDoubleClick={() => onPlay(i)}
-          >
-            <td>{t.title}</td>
-            <td>{t.artist}</td>
-            <td>{t.album}</td>
-            <td className="time">{formatTime(t.durationMs)}</td>
-          </tr>
-        ))}
+        {tracks.map((t, i) => {
+          const isFavorite = favorites.has(t.id);
+          return (
+            <tr
+              key={t.id}
+              className={t.path === playingPath ? "playing" : undefined}
+              onDoubleClick={() => onPlay(i)}
+            >
+              <td className="fav-col">
+                <button
+                  className={isFavorite ? "fav on" : "fav"}
+                  aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+                  aria-pressed={isFavorite}
+                  onClick={() => onToggleFavorite(t.id)}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                >
+                  {isFavorite ? "♥" : "♡"}
+                </button>
+              </td>
+              <td>{t.title}</td>
+              <td>{t.artist}</td>
+              <td>{t.album}</td>
+              {showPlays && <td className="time">{t.plays}</td>}
+              <td className="time">{formatTime(t.durationMs)}</td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );

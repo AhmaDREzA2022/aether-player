@@ -12,7 +12,7 @@ use std::{
     thread,
     time::Duration,
 };
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Shared state that every command can read.
 pub struct AppState {
@@ -35,7 +35,8 @@ impl AppState {
     }
 }
 
-/// Records plays in the library. Ends by itself when the player is dropped.
+/// Records plays in the library and tells the window when one was stored.
+/// Ends by itself when the player is dropped.
 fn spawn_history_recorder(handle: tauri::AppHandle, controller: &Arc<PlaybackController>) {
     let weak = Arc::downgrade(controller);
     thread::spawn(move || {
@@ -45,10 +46,19 @@ fn spawn_history_recorder(handle: tauri::AppHandle, controller: &Arc<PlaybackCon
             let Some(controller) = weak.upgrade() else { break };
             let Ok(status) = controller.status() else { continue };
 
-            let state = handle.state::<AppState>();
-            let library = state.library();
-            if let Err(e) = record_if_due(&mut tracker, &status, &library) {
-                eprintln!("could not record play: {e}");
+            let recorded = {
+                let state = handle.state::<AppState>();
+                let library = state.library();
+                match record_if_due(&mut tracker, &status, &library) {
+                    Ok(recorded) => recorded,
+                    Err(e) => {
+                        eprintln!("could not record play: {e}");
+                        false
+                    }
+                }
+            };
+            if recorded {
+                let _ = handle.emit("history-changed", ());
             }
         }
     });
@@ -84,9 +94,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::default_music_dir,
             commands::scan_folder,
-            commands::list_tracks,
-            commands::search_tracks,
-            commands::play_list,
+            commands::list_source,
+            commands::play_source,
+            commands::favorite_ids,
+            commands::toggle_favorite,
             commands::player_toggle,
             commands::player_next,
             commands::player_prev,
