@@ -1,6 +1,6 @@
 use crate::{error::AppError, AppState};
 use aether_common::{PlaybackState, Player, PlayerStatus, Track};
-use aether_core::{Library, LibraryError, LibraryTrack, SyncReport};
+use aether_core::{Library, LibraryError, LibraryTrack, Playlist, SyncReport};
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, time::Duration};
 use tauri::{Manager, State};
@@ -125,6 +125,7 @@ pub enum ListSource {
     Favorites,
     Recent,
     MostPlayed,
+    Playlist { id: i64 },
 }
 
 const HISTORY_LIMIT: usize = 100;
@@ -139,6 +140,7 @@ fn load_source(
         ListSource::Library { query } => plain(library.search(query)?),
         ListSource::Favorites => plain(library.favorites()?),
         ListSource::Recent => plain(library.recently_played(HISTORY_LIMIT)?),
+        ListSource::Playlist { id } => plain(library.playlist_tracks(*id)?),
         ListSource::MostPlayed => library
             .most_played(HISTORY_LIMIT)?
             .into_iter()
@@ -230,6 +232,82 @@ pub fn player_status(state: State<'_, AppState>) -> Result<StatusDto, AppError> 
     Ok(state.player()?.status()?.into())
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistDto {
+    id: i64,
+    name: String,
+    track_count: usize,
+}
+
+impl From<Playlist> for PlaylistDto {
+    fn from(p: Playlist) -> Self {
+        Self {
+            id: p.id,
+            name: p.name,
+            track_count: p.track_count,
+        }
+    }
+}
+
+#[tauri::command(async)]
+pub fn list_playlists(state: State<'_, AppState>) -> Result<Vec<PlaylistDto>, AppError> {
+    let playlists = state.library().playlists()?;
+    Ok(playlists.into_iter().map(PlaylistDto::from).collect())
+}
+
+#[tauri::command(async)]
+pub fn create_playlist(state: State<'_, AppState>, name: String) -> Result<PlaylistDto, AppError> {
+    Ok(state.library().create_playlist(&name)?.into())
+}
+
+#[tauri::command(async)]
+pub fn rename_playlist(
+    state: State<'_, AppState>,
+    playlist_id: i64,
+    name: String,
+) -> Result<(), AppError> {
+    state.library().rename_playlist(playlist_id, &name)?;
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn delete_playlist(state: State<'_, AppState>, playlist_id: i64) -> Result<(), AppError> {
+    state.library().delete_playlist(playlist_id)?;
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn add_to_playlist(
+    state: State<'_, AppState>,
+    playlist_id: i64,
+    track_ids: Vec<i64>,
+) -> Result<(), AppError> {
+    state.library().add_to_playlist(playlist_id, &track_ids)?;
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn remove_from_playlist(
+    state: State<'_, AppState>,
+    playlist_id: i64,
+    position: usize,
+) -> Result<(), AppError> {
+    state.library().remove_from_playlist(playlist_id, position)?;
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn move_in_playlist(
+    state: State<'_, AppState>,
+    playlist_id: i64,
+    from: usize,
+    to: usize,
+) -> Result<(), AppError> {
+    state.library().move_in_playlist(playlist_id, from, to)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,7 +327,7 @@ mod tests {
                 duration: Duration::from_millis(61_500),
                 track_no: Some(3),
             },
-        
+
         });
 
         let json = serde_json::to_value(&dto).unwrap();
@@ -286,5 +364,20 @@ mod tests {
 
         let m: ListSource = serde_json::from_str(r#"{"kind":"mostPlayed"}"#).unwrap();
         assert!(matches!(m, ListSource::MostPlayed));
+    }
+
+    #[test]
+    fn playlist_source_and_dto_match_the_frontend() {
+        let s: ListSource = serde_json::from_str(r#"{"kind":"playlist","id":3}"#).unwrap();
+        assert!(matches!(s, ListSource::Playlist { id: 3 }));
+
+        let dto = PlaylistDto::from(Playlist {
+            id: 2,
+            name: "Mix".into(),
+            track_count: 4,
+        });
+        let json = serde_json::to_value(&dto).unwrap();
+        assert_eq!(json["name"], "Mix");
+        assert_eq!(json["trackCount"], 4);
     }
 }

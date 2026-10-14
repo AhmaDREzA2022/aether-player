@@ -180,6 +180,13 @@ impl Library {
         )
     }
 
+    /// The ids of every favorite track (the UI uses this to draw the hearts).
+    pub fn favorite_ids(&self) -> Result<Vec<i64>, LibraryError> {
+        let mut stmt = self.conn.prepare("SELECT track_id FROM favorites")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     fn require_track(&self, track_id: i64) -> Result<(), LibraryError> {
         let exists: bool = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM tracks WHERE id = ?1)",
@@ -1212,5 +1219,23 @@ mod tests {
         lib.sync_folder(dir.path()).unwrap();
 
         assert!(lib.recently_played(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn favorite_ids_lists_every_favorite() {
+        let lib = library_with_tags();
+        let a = find(&lib, "Blue Monday").id;
+        let b = find(&lib, "Track").id;
+        lib.set_favorite(a, true).unwrap();
+        lib.set_favorite(b, true).unwrap();
+
+        let mut ids = lib.favorite_ids().unwrap();
+        ids.sort();
+        let mut expected = vec![a, b];
+        expected.sort();
+        assert_eq!(ids, expected);
+
+        lib.set_favorite(a, false).unwrap();
+        assert_eq!(lib.favorite_ids().unwrap(), vec![b]);
     }
 }
