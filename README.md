@@ -83,7 +83,7 @@ cargo run --release -p aether-cli -- ~/Music   # play a folder
 | Milestone | State |
 |-----------|-------|
 | V1.0 Playback core | ✅ done |
-| V1.1 Library & history | ✅ in progress |
-| V1.2 Desktop shell (Tauri) | 🚧 in progress |
-| V1.3 Desktop polish | planned |
+| V1.1 Library & history | ✅ done |
+| V1.2 Desktop shell (Tauri) | ✅ done |
+| V1.3 Desktop polish | 🚧 in progress |
 | V1.4 Linux integration (MPRIS) | planned |
