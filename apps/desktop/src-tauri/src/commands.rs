@@ -1,5 +1,6 @@
 use crate::{error::AppError, AppState};
 use aether_common::{PlaybackState, Player, PlayerStatus, Track};
+use aether_metadata::read_cover;
 use aether_core::{Library, LibraryError, LibraryTrack, Playlist, SyncReport};
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, time::Duration};
@@ -54,6 +55,23 @@ impl From<SyncReport> for SyncReportDto {
             failed: r.failed,
         }
     }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverArtDto {
+    /// Raw image bytes (serde will encode as a JSON array of numbers).
+    data: Vec<u8>,
+    mime: String,
+}
+
+/// On-demand cover for the file at `path`. `None` when the file has no art.
+#[tauri::command(async)]
+pub fn cover_art(path: String) -> Result<Option<CoverArtDto>, AppError> {
+    Ok(read_cover(PathBuf::from(path).as_path()).map(|c| CoverArtDto {
+        data: c.data,
+        mime: c.mime,
+    }))
 }
 
 /// the users music folder, to prefill the sxan box.

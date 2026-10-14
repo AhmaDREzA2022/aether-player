@@ -26,6 +26,7 @@ aether-core = { version = "0.1.0", path = "../../../crates/core" }
 aether-common = { version = "0.1.0", path = "../../../crates/common" }
 thiserror.workspace = true
 aether-audio = { version = "0.1.0", path = "../../../crates/audio" }
+aether-metadata = { version = "0.1.0", path = "../../../crates/metadata" }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

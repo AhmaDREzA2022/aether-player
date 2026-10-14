@@ -25,7 +25,8 @@ export type Source =
   | { kind: "library"; query: string }
   | { kind: "favorites" }
   | { kind: "recent" }
-  | { kind: "mostPlayed" };
+  | { kind: "mostPlayed" }
+  | { kind: "playlist"; id: number };
 
 export type PlaybackState = "playing" | "paused" | "stopped" | "finished";
 
@@ -48,6 +49,11 @@ export interface Playlist {
   id: number;
   name: string;
   trackCount: number;
+}
+
+export interface CoverArt {
+  data: number[]; // bytes from Rust
+  mime: string;
 }
 
 export const api = {
@@ -78,4 +84,6 @@ export const api = {
     invoke<void>("remove_from_playlist", { playlistId, position }),
   moveInPlaylist: (playlistId: number, from: number, to: number) =>
     invoke<void>("move_in_playlist", { playlistId, from, to }),
+    coverArt: (path: string) =>
+      invoke<CoverArt | null>("cover_art", { path }),
 };

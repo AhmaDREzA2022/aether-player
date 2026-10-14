@@ -111,6 +111,7 @@ pub fn run() {
             commands::player_seek,
             commands::player_set_volume,
             commands::player_status,
+            commands::cover_art,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,6 +1,7 @@
 use aether_common::{PlayerError, Track};
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::tag::Accessor;
+use lofty::picture::MimeType;
 use std::path::{Path, PathBuf};
 use walkdir::{DirEntry, WalkDir};
 
@@ -42,6 +43,37 @@ pub fn read_track(path: &Path) -> Result<Track, PlayerError> {
         album,
         duration,
         track_no,
+    })
+}
+
+/// Embedded cover art, if the file has one.
+#[derive(Debug, Clone)]
+pub struct CoverArt {
+    pub data: Vec<u8>,
+    pub mime: String,
+}
+
+/// Read the primary embedded picture from an audio file.
+/// Returns `None` when there is no picture or the file can't be read.
+pub fn read_cover(path: &Path) -> Option<CoverArt> {
+    let tagged = lofty::read_from_path(path).ok()?;
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
+    let picture = tag.pictures().first()?;
+
+    let mime = match picture.mime_type() {
+        Some(MimeType::Jpeg) => "image/jpeg",
+        Some(MimeType::Png) => "image/png",
+        Some(MimeType::Gif) => "image/gif",
+        Some(MimeType::Bmp) => "image/bmp",
+        Some(MimeType::Tiff) => "image/tiff",
+        Some(other) => other.as_str(),
+        None => "application/octet-stream",
+    }
+    .to_string();
+
+    Some(CoverArt {
+        data: picture.data().to_vec(),
+        mime,
     })
 }
 

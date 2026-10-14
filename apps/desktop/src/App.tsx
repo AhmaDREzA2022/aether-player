@@ -1,84 +1,302 @@
-import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { api, Playlist, Source, SyncReport, Track } from "./api";
+import { NowPlayingBar } from "./NowPlayingBar";
+import { PlaylistHeader } from "./PlaylistHeader";
+import { Sidebar, View } from "./Sidebar";
+import { TrackTable } from "./TrackTable";
+import { usePlayerStatus } from "./usePlayerStatus";
+import { useShortcuts } from "./useShortcuts";
+import "./App.css";
 
-export interface Track {
-  id: number;
-  path: string;
-  title: string;
-  artist: string;
-  album: string;
-  durationMs: number;
-  trackNo: number | null;
-  /** Only set in the "Most played" view. */
-  plays: number | null;
-}
-
-export interface SyncReport {
-  added: number;
-  updated: number;
-  unchanged: number;
-  removed: number;
-  failed: number;
-}
-
-export interface Playlist {
-  id: number;
-  name: string;
-  trackCount: number;
-}
-
-/** Which list of tracks to show or play. */
-export type Source =
-  | { kind: "library"; query: string }
-  | { kind: "favorites" }
-  | { kind: "recent" }
-  | { kind: "mostPlayed" }
-  | { kind: "playlist"; id: number };
-
-export type PlaybackState = "playing" | "paused" | "stopped" | "finished";
-
-export interface NowPlaying {
-  path: string;
-  title: string;
-  artist: string;
-  album: string;
-}
-
-export interface PlayerStatus {
-  state: PlaybackState;
-  positionMs: number;
-  durationMs: number;
-  volume: number;
-  track: NowPlaying | null;
-}
-
-export const api = {
-  defaultMusicDir: () => invoke<string>("default_music_dir"),
-  scanFolder: (path: string) => invoke<SyncReport>("scan_folder", { path }),
-  listSource: (source: Source) => invoke<Track[]>("list_source", { source }),
-  playSource: (source: Source, start: number) =>
-    invoke<void>("play_source", { source, start }),
-  favoriteIds: () => invoke<number[]>("favorite_ids"),
-  toggleFavorite: (trackId: number) =>
-    invoke<boolean>("toggle_favorite", { trackId }),
-
-  listPlaylists: () => invoke<Playlist[]>("list_playlists"),
-  createPlaylist: (name: string) =>
-    invoke<Playlist>("create_playlist", { name }),
-  renamePlaylist: (playlistId: number, name: string) =>
-    invoke<void>("rename_playlist", { playlistId, name }),
-  deletePlaylist: (playlistId: number) =>
-    invoke<void>("delete_playlist", { playlistId }),
-  addToPlaylist: (playlistId: number, trackIds: number[]) =>
-    invoke<void>("add_to_playlist", { playlistId, trackIds }),
-  removeFromPlaylist: (playlistId: number, position: number) =>
-    invoke<void>("remove_from_playlist", { playlistId, position }),
-  moveInPlaylist: (playlistId: number, from: number, to: number) =>
-    invoke<void>("move_in_playlist", { playlistId, from, to }),
-
-  toggle: () => invoke<void>("player_toggle"),
-  next: () => invoke<void>("player_next"),
-  prev: () => invoke<void>("player_prev"),
-  seek: (positionMs: number) => invoke<void>("player_seek", { positionMs }),
-  setVolume: (volume: number) => invoke<void>("player_set_volume", { volume }),
-  status: () => invoke<PlayerStatus>("player_status"),
+const EMPTY_TEXT: Record<string, string> = {
+  library: "No tracks yet. Scan a folder to get started.",
+  favorites: "No favorites yet. Click the heart next to a track.",
+  recent: "Nothing played yet. A play counts after 30 seconds.",
+  mostPlayed: "Nothing played yet. A play counts after 30 seconds.",
+  playlist: "This playlist is empty. Add tracks with the + button.",
 };
+
+function describe(r: SyncReport): string {
+  return `Scan finished: ${r.added} added, ${r.updated} updated, ${r.removed} removed, ${r.failed} failed`;
+}
+
+export default function App() {
+  const [folder, setFolder] = useState("");
+  const [view, setView] = useState<View>({ kind: "library" });
+  const [query, setQuery] = useState("");
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [shownSource, setShownSource] = useState<Source>({
+    kind: "library",
+    query: "",
+  });
+  const [favorites, setFavorites] = useState<Set<number>>(new Set());
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [message, setMessage] = useState("");
+  const [scanning, setScanning] = useState(false);
+  const [version, setVersion] = useState(0);
+
+  const status = usePlayerStatus();
+  useShortcuts(status, setMessage);
+  const playingPath = status?.track?.path ?? null;
+
+  const source = useMemo<Source>(() => {
+    switch (view.kind) {
+      case "favorites":
+        return { kind: "favorites" };
+      case "recent":
+        return { kind: "recent" };
+      case "mostPlayed":
+        return { kind: "mostPlayed" };
+      case "playlist":
+        return { kind: "playlist", id: view.id };
+      default:
+        return { kind: "library", query: query.trim() };
+    }
+  }, [view, query]);
+
+  const activePlaylist =
+    view.kind === "playlist"
+      ? playlists.find((p) => p.id === view.id) ?? null
+      : null;
+
+  const loadFavorites = useCallback(() => {
+    api
+      .favoriteIds()
+      .then((ids) => setFavorites(new Set(ids)))
+      .catch(() => {});
+  }, []);
+
+  const loadPlaylists = useCallback(() => {
+    api
+      .listPlaylists()
+      .then(setPlaylists)
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    api.defaultMusicDir().then(setFolder).catch(() => {});
+    loadFavorites();
+    loadPlaylists();
+  }, [loadFavorites, loadPlaylists]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    listen("history-changed", () => setVersion((v) => v + 1)).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const delay = source.kind === "library" ? 150 : 0;
+    const timer = setTimeout(() => {
+      api
+        .listSource(source)
+        .then((result) => {
+          if (cancelled) return;
+          setTracks(result);
+          setShownSource(source);
+        })
+        .catch((e) => {
+          if (!cancelled) setMessage(String(e));
+        });
+    }, delay);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [source, version]);
+
+  async function scan() {
+    setScanning(true);
+    setMessage("Scanning…");
+    try {
+      const report = await api.scanFolder(folder);
+      setMessage(describe(report));
+      setVersion((v) => v + 1);
+      loadFavorites();
+    } catch (e) {
+      setMessage(`Scan failed: ${e}`);
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  const play = useCallback(
+    (index: number) => {
+      api
+        .playSource(shownSource, index)
+        .catch((e) => setMessage(`Could not play: ${e}`));
+    },
+    [shownSource],
+  );
+
+  const toggleFavorite = useCallback((id: number) => {
+    api
+      .toggleFavorite(id)
+      .then((isFavorite) => {
+        setFavorites((prev) => {
+          const next = new Set(prev);
+          if (isFavorite) next.add(id);
+          else next.delete(id);
+          return next;
+        });
+        setVersion((v) => v + 1);
+      })
+      .catch((e) => setMessage(`Could not change favorite: ${e}`));
+  }, []);
+
+  async function createPlaylist(name: string): Promise<boolean> {
+    const trimmed = name.trim();
+    if (!trimmed) return false;
+    try {
+      const p = await api.createPlaylist(trimmed);
+      loadPlaylists();
+      setView({ kind: "playlist", id: p.id });
+      return true;
+    } catch (e) {
+      setMessage(`Could not create playlist: ${e}`);
+      return false;
+    }
+  }
+
+  async function renamePlaylist(name: string): Promise<boolean> {
+    if (view.kind !== "playlist") return false;
+    try {
+      await api.renamePlaylist(view.id, name.trim());
+      loadPlaylists();
+      return true;
+    } catch (e) {
+      setMessage(`Could not rename: ${e}`);
+      return false;
+    }
+  }
+
+  function deletePlaylist() {
+    if (view.kind !== "playlist") return;
+    api
+      .deletePlaylist(view.id)
+      .then(() => {
+        setView({ kind: "library" });
+        loadPlaylists();
+      })
+      .catch((e) => setMessage(`Could not delete: ${e}`));
+  }
+
+  function addToPlaylist(playlistId: number, trackId: number) {
+    api
+      .addToPlaylist(playlistId, [trackId])
+      .then(() => {
+        loadPlaylists();
+        if (view.kind === "playlist" && view.id === playlistId) {
+          setVersion((v) => v + 1);
+        }
+      })
+      .catch((e) => setMessage(`Could not add to playlist: ${e}`));
+  }
+
+  function removeFromPlaylist(position: number) {
+    if (view.kind !== "playlist") return;
+    api
+      .removeFromPlaylist(view.id, position)
+      .then(() => {
+        loadPlaylists();
+        setVersion((v) => v + 1);
+      })
+      .catch((e) => setMessage(`Could not remove: ${e}`));
+  }
+
+  function moveInPlaylist(from: number, to: number) {
+    if (view.kind !== "playlist") return;
+    api
+      .moveInPlaylist(view.id, from, to)
+      .then(() => setVersion((v) => v + 1))
+      .catch((e) => setMessage(`Could not reorder: ${e}`));
+  }
+
+  const emptyText =
+    view.kind === "library" && query.trim()
+      ? "No matches."
+      : EMPTY_TEXT[view.kind] ?? "Nothing here.";
+
+  return (
+    <div className="app">
+      <header className="toolbar">
+        <input
+          className="folder"
+          value={folder}
+          onChange={(e) => setFolder(e.target.value)}
+          placeholder="Music folder"
+        />
+        <button onClick={scan} disabled={scanning || !folder.trim()}>
+          {scanning ? "Scanning…" : "Scan"}
+        </button>
+        {view.kind === "library" && (
+          <input
+            className="search"
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search title, artist, album"
+          />
+        )}
+      </header>
+
+      <div className="body">
+        <Sidebar
+          view={view}
+          playlists={playlists}
+          onSelect={setView}
+          onCreate={createPlaylist}
+        />
+        <div className="content">
+          {activePlaylist && (
+            <PlaylistHeader
+              playlist={activePlaylist}
+              onPlay={() => play(0)}
+              onRename={renamePlaylist}
+              onDelete={deletePlaylist}
+            />
+          )}
+          <div className="status">
+            {message || `${tracks.length} tracks`}
+          </div>
+          <main className="list">
+            {tracks.length === 0 ? (
+              <p className="empty">{emptyText}</p>
+            ) : (
+              <TrackTable
+                tracks={tracks}
+                playingPath={playingPath}
+                favorites={favorites}
+                playlists={playlists}
+                showPlays={shownSource.kind === "mostPlayed"}
+                playlistActions={
+                  view.kind === "playlist"
+                    ? {
+                        onMove: moveInPlaylist,
+                        onRemove: removeFromPlaylist,
+                      }
+                    : undefined
+                }
+                onPlay={play}
+                onToggleFavorite={toggleFavorite}
+                onAddToPlaylist={addToPlaylist}
+              />
+            )}
+          </main>
+        </div>
+      </div>
+
+      <NowPlayingBar status={status} onError={setMessage} />
+    </div>
+  );
+}

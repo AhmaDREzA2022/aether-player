@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { api, PlayerStatus } from "./api";
 import { formatTime } from "./format";
 import { Slider } from "./Slider";
@@ -12,18 +13,55 @@ export function NowPlayingBar({ status, onError }: Props) {
     action.catch((e) => onError(String(e)));
   const track = status?.track ?? null;
   const playing = status?.state === "playing";
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
+
+  // Load cover when the current track path changes.
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+
+    setCoverUrl(null);
+    if (!track?.path) return;
+
+    api
+      .coverArt(track.path)
+      .then((cover) => {
+        if (cancelled || !cover) return;
+        const bytes = new Uint8Array(cover.data);
+        const blob = new Blob([bytes], { type: cover.mime });
+        objectUrl = URL.createObjectURL(blob);
+        setCoverUrl(objectUrl);
+      })
+      .catch(() => {
+        // No cover is fine — keep the placeholder.
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [track?.path]);
 
   return (
     <footer className="player">
       <div className="now">
-        {track ? (
-          <>
-            <div className="now-title">{track.title}</div>
-            <div className="now-artist">{track.artist}</div>
-          </>
-        ) : (
-          <div className="now-artist">Nothing playing</div>
-        )}
+        <div className="cover" aria-hidden={!coverUrl}>
+          {coverUrl ? (
+            <img src={coverUrl} alt="" />
+          ) : (
+            <div className="cover-placeholder" />
+          )}
+        </div>
+        <div className="now-text">
+          {track ? (
+            <>
+              <div className="now-title">{track.title}</div>
+              <div className="now-artist">{track.artist}</div>
+            </>
+          ) : (
+            <div className="now-artist">Nothing playing</div>
+          )}
+        </div>
       </div>
 
       <div className="transport">
